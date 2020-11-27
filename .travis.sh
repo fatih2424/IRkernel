@@ -52,8 +52,6 @@ create_conda_environment() (
     # Useful for debugging any issues with conda
     conda info -a
     conda create -q -n test-environment python=3.5 jupyter nose
-    
-    ls ~/miniconda/bin
 )
 
 ### SCRIPT ###
@@ -74,13 +72,22 @@ check_package() (
     
     R CMD check "$PKG_TARBALL" --as-cran
     ! grep -q 'WARNING' "$CHECK_LOG"
-    ! grep -q 'NOTE' "$CHECK_LOG"
-    # Code problems are only one note, so make sure that we catch new ones.
-    # Count the lines with real notes in it.
-    # Remove leading whitespace because wc -l on OSX has some there.
+    # .. because ': ' was resulting in an replacement by travis and an error
+    grep -q 'Status..1 NOTE' "$CHECK_LOG"
+    # Code problems are only one note, so make sure that we catch new ones...
+    # count the lines with real note sin it... remove leading whitespace because
+    # wc -l on OSX has some there...
     LINES=$(grep -v '* .*$' "$CHECK_LOG" | wc -l | sed -e 's/^[[:space:]]*//')
     echo "Lines: $LINES"
-    #  1 line  for "Running testthat.R"
-    #  1 line  from the "Status" at the end
-    if [[ "_$LINES" != _2 ]]; then grep -v '* .*$' "$CHECK_LOG"; false; fi
+    #  4 lines from the "attach" NOTE, 1 lines from the "Status" at the end
+    if [[ "_$LINES" != _5 ]]; then grep -v '* .*$' "$CHECK_LOG"; false; fi
+)
+
+test_kernel() (
+    set -ex
+    
+    R CMD INSTALL "$PKG_TARBALL"
+    Rscript -e 'IRkernel::installspec()'
+    Rscript -e 'IRkernel::installspec(name = "testir", displayname = "testir")'
+    Rscript -e 'devtools::test()'
 )

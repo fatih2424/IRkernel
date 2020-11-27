@@ -1,18 +1,7 @@
-# Test manually via
-# IR_KERNEL_NAME=ir python3 -m test_ir -k some_test
-
-import os
-import sys
-from pathlib import Path
-
-HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE / 'jkt'))
-
 import unittest
 import jupyter_kernel_test as jkt
 
 from jupyter_client.manager import start_new_kernel
-from jupyter_kernel_test.messagespec import validate_message
 
 
 without_rich_display = '''\
@@ -23,18 +12,25 @@ options(jupyter.rich_display = TRUE)
 #this will not work!
 #withr::with_options(list(jupyter.rich_display = FALSE), {})
 
-TIMEOUT = 15
 
-
-class IRkernelTests(jkt.KernelTests):
-    kernel_name = os.environ.get('IR_KERNEL_NAME', 'testir')
+class InstallspecTests(jkt.KernelTests):
+    # just a small test, it's the same kernel after all...
+    kernel_name = 'testir'
 
     language_name = 'R'
 
-    def _execute_code(self, code, tests=True, silent=False, store_history=True):
+    code_hello_world = 'print("hello, world")'
+
+
+class IRkernelTests(jkt.KernelTests):
+    kernel_name = 'ir'
+
+    language_name = 'R'
+
+    def _execute_code(self, code, tests=True):
         self.flush_channels()
 
-        reply, output_msgs = self.execute_helper(code, silent=silent, store_history=store_history)
+        reply, output_msgs = self.execute_helper(code)
 
         self.assertEqual(reply['content']['status'], 'ok', '{0}: {0}'.format(reply['content'].get('ename'), reply['content'].get('evalue')))
         if tests:
@@ -46,20 +42,10 @@ class IRkernelTests(jkt.KernelTests):
     code_hello_world = 'print("hello, world")'
 
     completion_samples = [
-        {'text': 'zi',                     'matches': {'zip'}},
-        {'text': 'seq_len(',               'matches': {'length.out = '}},
-        {'text': 'base::transform(',       'matches': {'`_data` = ', '...'}},
-        {'text': 'foo(R_system',           'matches': {'R_system_version'}},
-        {'text': 'version$plat',           'matches': {'version$platform'}},
-        {'text': 'stats4::AIC@def',        'matches': {'stats4::AIC@default'}},
-        {'text': 'stats4::AIC@default@ta', 'matches': {'stats4::AIC@default@target'}},
-        {'text': 'grDevice',               'matches': {'grDevices::'}},
-        {'text': 'base::abbrev',           'matches': {'base::abbreviate'}},
-        {'text': 'base::.rowNamesD',       'matches': {'base::`.rowNamesDF<-`'}},
-        {'text': 'repr:::repr_png.def',    'matches': {'repr:::repr_png.default'}},
-        {'text': 'repr::format2repr$mark', 'matches': {'repr::format2repr$markdown'}},
-        {'text': 'load("test_i',           'matches': {'test_ir.py'}},
-        {'text': 'load("./test_',          'matches': {'./test_utils.r', './test_kernel.r', './test_ir.py'}},
+        {
+            'text': 'zi',
+            'matches': {'zip'},
+        },
     ]
 
     complete_code_samples = ['1', 'print("hello, world")', 'f <- function(x) {\n  x*2\n}']
@@ -106,17 +92,18 @@ class IRkernelTests(jkt.KernelTests):
         code = 'plot(1:3)'
         reply, output_msgs = self._execute_code(code)
         
-        # we currently send two formats: png, and text/plain
+        # we currently send three formats: png, svg and text/plain
         data = output_msgs[0]['content']['data']
-        self.assertEqual(len(data), 2, data.keys())
+        self.assertEqual(len(data), 3, data.keys())
         self.assertEqual(data['text/plain'], 'plot without title')
+        self.assertIn('image/svg+xml', data)
         self.assertIn('image/png', data)
         
-        # we send image dimensions
+        # we isolate only svg plots
         metadata = output_msgs[0]['content']['metadata']
         self.assertEqual(len(metadata), 1, metadata.keys())
-        self.assertIn('image/png', metadata)
-        self.assertEqual(metadata['image/png'], dict(width=420, height=420), metadata['image/png'])
+        self.assertEqual(len(metadata['image/svg+xml']), 1)
+        self.assertEqual(metadata['image/svg+xml']['isolated'], True)
 
     def test_irkernel_plots_only_PNG(self):
         """plotting PNG"""
@@ -135,55 +122,9 @@ class IRkernelTests(jkt.KernelTests):
         data = output_msgs[0]['content']['data']
         self.assertEqual(len(data), 1, data.keys())
         self.assertIn('image/png', data)
-
-        # nothing in metadata
-        metadata = output_msgs[0]['content']['metadata']
-        self.assertEqual(len(metadata), 1, metadata.keys())
-        self.assertIn('image/png', metadata)
-        self.assertEqual(metadata['image/png'], dict(width=420, height=420), metadata['image/png'])
-
-        # And reset
-        code = 'options(old_options)'
-        reply, output_msgs = self._execute_code(code, tests=False)
-
-    def test_irkernel_plots_only_SVG(self):
-        # again the reset dance (see PNG)
-        code = '''\
-            old_options <- options(jupyter.plot_mimetypes = c('image/svg+xml'))
-            plot(1:3)
-        '''
-        reply, output_msgs = self._execute_code(code)
-
-        # Only svg, no png or plain/text
-        data = output_msgs[0]['content']['data']
-        self.assertEqual(len(data), 1, data.keys())
-        self.assertIn('image/svg+xml', data)
         
-        # svg output is currently isolated
-        metadata = output_msgs[0]['content']['metadata']
-        self.assertEqual(len(metadata), 1, metadata.keys())
-        self.assertEqual(len(metadata['image/svg+xml']), 3)
-        self.assertEqual(metadata['image/svg+xml'], dict(width=420, height=420, isolated=True), metadata['image/svg+xml'])
-
         # And reset
         code = 'options(old_options)'
-        reply, output_msgs = self._execute_code(code, tests=False)
-
-    def test_irkernel_plots_without_rich_display(self):
-        code = '''\
-            options(jupyter.rich_display = FALSE)
-            plot(1:3)
-        '''
-        reply, output_msgs = self._execute_code(code)
-
-        # Even with rich output as false, we send plots
-        data = output_msgs[0]['content']['data']
-        self.assertEqual(len(data), 2, data.keys())
-        self.assertEqual(data['text/plain'], 'plot without title')
-        self.assertIn('image/png', data)
-
-        # And reset
-        code = 'options(jupyter.rich_display = TRUE)'
         reply, output_msgs = self._execute_code(code, tests=False)
 
     def test_irkernel_df_default_rich_output(self):
@@ -193,7 +134,7 @@ class IRkernelTests(jkt.KernelTests):
         
         # we currently send three formats: text/plain, html, and latex
         data = output_msgs[0]['content']['data']
-        self.assertEqual(len(data), 4, data.keys())
+        self.assertEqual(len(data), 3, data.keys())
 
     def test_irkernel_df_no_rich_output(self):
         """data.frame plain representation"""
@@ -231,102 +172,7 @@ class IRkernelTests(jkt.KernelTests):
         data = output_msgs[0]['content']['data']
         self.assertGreaterEqual(len(data), 1, data.keys())
         self.assertEqual(data['text/plain'], '[1] TRUE', data.keys())
-    
-    def test_warning_message(self):
-        self.flush_channels()
-        reply, output_msgs = self.execute_helper('options(warn=1); warning(simpleWarning("wmsg"))')
-        self.assertEqual(output_msgs[0]['msg_type'], 'stream')
-        self.assertEqual(output_msgs[0]['content']['name'], 'stderr')
-        self.assertEqual(output_msgs[0]['content']['text'].strip(), 'Warning message:\n“wmsg”')
-        
-        self.flush_channels()
-        reply, output_msgs = self.execute_helper('options(warn=1); f <- function() warning("wmsg"); f()')
-        self.assertEqual(output_msgs[0]['msg_type'], 'stream')
-        self.assertEqual(output_msgs[0]['content']['name'], 'stderr')
-        self.assertEqual(output_msgs[0]['content']['text'].strip(), 'Warning message in f():\n“wmsg”')
-
-    def test_should_increment_history(self):
-        """properly increments execution history"""
-        code = 'data.frame(x = 1:3)'
-        reply, output_msgs = self._execute_code(code)
-        reply2, output_msgs2 = self._execute_code(code)
-        execution_count_1 = reply['content']['execution_count']
-        execution_count_2 = reply2['content']['execution_count']
-        self.assertEqual(execution_count_1 + 1, execution_count_2)
-
-    def test_should_not_increment_history(self):
-        """Does not increment history if silent is true or store_history is false"""
-        code = 'data.frame(x = 1:3)'
-        reply, output_msgs = self._execute_code(code, store_history=False)
-        reply2, output_msgs2 = self._execute_code(code, store_history=False)
-        reply3, output_msgs3 = self._execute_code(code, tests=False, silent=True)
-        execution_count_1 = reply['content']['execution_count']
-        execution_count_2 = reply2['content']['execution_count']
-        execution_count_3 = reply3['content']['execution_count']
-        self.assertEqual(execution_count_1, execution_count_2)
-        self.assertEqual(execution_count_1, execution_count_3)
-
-    def test_irkernel_inspects(self):
-        """Test if object inspection works."""
-        self.flush_channels()
-
-        def test_token_is_ok(token, preprocess=None, postprocess=None):
-            """Check if inspect_request for the `token` returns a reply.
-
-            Run code in `preprocess` before requesting if it's given,
-            and `proprocess` after requesting.
-
-            Currently just test if the kernel replys without an error
-            and not care about its content.
-            Because the contents of inspections are still so arguable.
-            When the requirements for the contents are decided,
-            fix the tests beow and check the contents.
-            """
-            if preprocess:
-                self._execute_code(preprocess, tests=False)
-
-            msg_id = self.kc.inspect(token)
-            reply = self.kc.get_shell_msg(timeout=TIMEOUT)
-            validate_message(reply, 'inspect_reply', msg_id)
-
-            self.assertEqual(reply['content']['status'], 'ok')
-            self.assertTrue(reply['content']['found'])
-            self.assertGreaterEqual(len(reply['content']['data']), 1)
-
-            if postprocess:
-                self._execute_code(postprocess, tests=False)
-
-        # Numeric constant
-        test_token_is_ok('1')
-        # Reserved word
-        test_token_is_ok('NULL')
-        # Dataset with a help document
-        test_token_is_ok('iris')
-        # Function with a help document
-        test_token_is_ok('c')
-        # Function name with namespace
-        test_token_is_ok('base::c')
-        # Function not exported from namespace
-        test_token_is_ok('tools:::.Rd2pdf')
-        # User-defined variable
-        test_token_is_ok(
-            'x',
-            preprocess='x <- 1',
-            postprocess='rm("x")'
-        )
-        # User-defined function
-        test_token_is_ok(
-            'f',
-            preprocess='f <- function (x) x + x',
-            postprocess='rm("f")'
-        )
-        # Object which masks other object in workspace
-        test_token_is_ok(
-            'c',
-            preprocess='c <- function (x) x + x',
-            postprocess='rm("c")'
-        )
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main()
